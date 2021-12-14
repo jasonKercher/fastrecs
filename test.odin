@@ -389,3 +389,104 @@ file_none :: proc(t: ^testing.T) {
 
 	_teardown()
 }
+
+@(test)
+multi_eol :: proc(t: ^testing.T) {
+	_setup()
+
+	ret: fastrecs.Status
+
+	fastrecs.open(&reader, "test_multi_eol.csv")
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Good)
+	testing.expect_value(t, len(rec.fields), 3)
+	testing.expect_value(t, rec.fields[0], "123")
+	testing.expect_value(t, rec.fields[1], "4\n5\n6")
+	testing.expect_value(t, rec.fields[2], "789")
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Eof)
+
+	testing.expect_value(t, reader.rows, 1)
+	testing.expect_value(t, reader.embedded_qty, 2)
+
+	_teardown()
+}
+
+//@(test)
+failsafe_eof :: proc(t: ^testing.T) {
+	_setup()
+
+	ret: fastrecs.Status
+
+	reader.config += {.Failsafe}
+
+	fastrecs.open(&reader, "test_fs_eof.csv")
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Reset)
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Reset)
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Good)
+	testing.expect_value(t, rec.fields[0], "\"")
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Eof)
+	
+	_teardown()
+}
+
+//@(test)
+failsafe_max :: proc(t: ^testing.T) {
+	_setup()
+
+	ret: fastrecs.Status
+
+	reader.config += {.Failsafe}
+
+	fastrecs.open(&reader, "test_fs_max.csv")
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Reset)
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Reset)
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Good)
+	testing.expect_value(t, rec.fields[0], "abc")
+	testing.expect_value(t, rec.fields[1], "\"def")
+
+	for ; ret == .Good; ret = fastrecs.get_record(&reader, &rec) {}
+
+	testing.expect_value(t, ret, fastrecs.Status.Eof)
+	testing.expect_value(t, reader.rows, 41)
+	
+	_teardown()
+}
+
+//@(test)
+failsafe_weak :: proc(t: ^testing.T) {
+	_setup()
+
+	ret: fastrecs.Status
+
+	reader.config += {.Failsafe}
+
+	fastrecs.open(&reader, "test_fs_weak.csv")
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Reset)
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Good)
+	testing.expect_value(t, len(rec.fields), 3)
+	testing.expect_value(t, rec.fields[0], "abc")
+	testing.expect_value(t, rec.fields[1], "de\"f")
+	testing.expect_value(t, rec.fields[2], "ghi")
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Eof)
+	
+	_teardown()
+}

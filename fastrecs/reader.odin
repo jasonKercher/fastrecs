@@ -422,6 +422,9 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 		if ._Using_Mmap in self.config {
 			eol, ret = _get_line_mmap(self, rec_str)
 		} else {
+			/* NOTE: REALLOCATION ON THE LINE BUFFER
+			 *       IS GOING TO FUCK US GOOD!
+			 */
 			eol, ret = _get_line(self, rec, rec_str)
 		}
 		#partial switch ret {
@@ -484,6 +487,9 @@ _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 		if ._Using_Mmap in self.config {
 			eol, ret = _get_line_mmap(self, rec_str)
 		} else {
+			/* NOTE: REALLOCATION ON THE LINE BUFFER
+			 *       IS GOING TO FUCK US GOOD!
+			 */
 			eol, ret = _get_line(self, rec, rec_str)
 		}
 		#partial switch ret {
