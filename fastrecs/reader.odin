@@ -23,7 +23,7 @@ Quotes :: enum {
 }
 
 Status :: enum {
-	None,
+	Good,
 	Error,
 	Reset,
 	Eof,
@@ -63,17 +63,17 @@ Reader :: struct {
 	_normal:        i32,
 	_normal_org:    i32,
 	_reader:        bufio.Reader,
-	_builders:      [dynamic]strings.Builder,
+	_builders:      [dynamic][dynamic]strings.Builder,
 	_line_buffers:  [dynamic][dynamic]u8,
 	_fields:        [dynamic][dynamic]string,
 	config:         bit_set[Config],
 	quote_style:    Quotes,
 }
 
-reader_construct :: proc(self: ^Reader, cfg: bit_set[Config] = {}) {
+construct :: proc(self: ^Reader, cfg: bit_set[Config] = {}) {
 	self^ =  {
 		file           = os.stdin,
-		_builders      = make([dynamic]strings.Builder),
+		_builders      = make([dynamic][dynamic]strings.Builder),
 		_fields        = make([dynamic][dynamic]string),
 		_line_buffers  = make([dynamic][dynamic]u8),
 		quote_style    = .Rfc4180,
@@ -84,14 +84,16 @@ reader_construct :: proc(self: ^Reader, cfg: bit_set[Config] = {}) {
 	}
 }
 
-reader_destroy :: proc(self: ^Reader) {
+destroy :: proc(self: ^Reader) {
 	close(self)
 
 	if self._weak_delim != "" {
 		delete(self._weak_delim)
 	}
 	for i := 0; i < len(self._builders); i += 1 {
-		strings.destroy_builder(&self._builders[i])
+		for b in &self._builders[i] {
+			strings.destroy_builder(&b)
+		}
 	}
 	delete(self._builders)
 	delete(self._fields)
@@ -122,7 +124,7 @@ open :: proc(self: ^Reader, file_name: string = "") -> Status {
 			return _error("file_size error")
 		}
 		if size == 0 {
-			return nil
+			return .Good
 		}
 		self.file_size = u64(size)
 
@@ -138,7 +140,7 @@ open :: proc(self: ^Reader, file_name: string = "") -> Status {
 			self.config +=  {
 				._Using_Mmap,
 			}
-			return nil
+			return .Good
 		}
 	}
 
@@ -152,12 +154,12 @@ open :: proc(self: ^Reader, file_name: string = "") -> Status {
 	r, ok := io.to_reader(os.stream_from_handle(self.file))
 	bufio.reader_init(&self._reader, r)
 
-	return nil
+	return .Good
 }
 
 close :: proc(self: ^Reader) -> Status {
 	if ._File_Open not_in self.config {
-		return nil
+		return .Good
 	}
 
 	if ._Using_Mmap in self.config {
@@ -174,7 +176,7 @@ close :: proc(self: ^Reader) -> Status {
 		os.close(self.file)
 		self.file = os.stdin
 	}
-	return nil
+	return .Good
 }
 
 seek :: proc(self: ^Reader, offset: u64) -> Status {
@@ -184,22 +186,22 @@ seek :: proc(self: ^Reader, offset: u64) -> Status {
 	self.offset = offset
 
 	if ._Using_Mmap in self.config {
-		return nil /* lol */
+		return .Good /* lol */
 	}
 
 	os.seek(self.file, i64(offset), os.SEEK_SET)
-	return nil
+	return .Good
 }
 
 /* probably pick something out of mem/virtual */
 advise :: proc(self: ^Reader, advise: c.int) -> Status {
 	if ._Using_Mmap not_in self.config {
-		return nil
+		return .Good
 	}
 	if virtual.madvise(self._mmap_ptr, uint(self.file_size), advise) != 0 {
 		return _error("madvise")
 	}
-	return nil
+	return .Good
 }
 
 reset :: proc(self: ^Reader) -> Status {
@@ -219,9 +221,9 @@ set_delim :: proc(self: ^Reader, delim: string) -> Status {
 	if len(self._weak_delim) != 0 {
 		delete(self._weak_delim)
 	}
-	fmt.aprintf(self._weak_delim, "\"%s", delim)
+	self._weak_delim = fmt.aprintf("\"%s", delim)
 
-	return nil
+	return .Good
 }
 
 /* The full record string is located one string behind rec.fields[0].
@@ -272,6 +274,10 @@ parse :: proc(
 	byte_limit := byte_limit
 	rec_str := rec_str
 
+	if byte_limit == bits.I32_MAX {
+		byte_limit = len(rec_str)
+	}
+
 	if len(self._delim) == 0 {
 		_find_delim(self, rec_str)
 	}
@@ -283,6 +289,10 @@ parse :: proc(
 	clear(fields)
 	append(fields, rec_str)
 
+	if rec._b != -1 {
+		clear(&self._builders[rec._b])
+	}
+
 	if self._normal > 0 {
 		field_limit = int(self._normal)
 	}
@@ -292,8 +302,13 @@ parse :: proc(
 	for rec_idx < byte_limit && len(fields^) < field_limit {
 		if len(fields^) > 1 {
 			rec_idx += len(self._delim)
-		}
 
+			/* Special case of empty field at eol */
+			if rec_idx >= byte_limit {
+				append(fields, "")
+				break
+			}
+		}
 		quotes := self.quote_style
 		if quotes != .None && rec_str[rec_idx] != '"' {
 			quotes = .None
@@ -318,7 +333,6 @@ parse :: proc(
 			reset(self)
 			return e
 		}
-
 	}
 
 	if self._normal == 0 {
@@ -327,39 +341,7 @@ parse :: proc(
 	self.rows += 1
 	rec.fields = fields[1:]
 
-	return nil
-}
-
-@(private = "file")
-_init_record :: proc(self: ^Reader, rec: ^Record) {
-	rec^ =  {
-		_b = -1,
-		_f = i32(len(self._fields)) + 1,
-	}
-	append_nothing(&self._fields)
-	append_nothing(_get_fields(self, rec))
-	if ._Using_Mmap not_in self.config {
-		append_nothing(&self._line_buffers)
-	}
-}
-
-@(private = "file")
-_get_builder :: proc(self: ^Reader, rec: ^Record) -> ^strings.Builder {
-	if rec._b == -1 {
-		rec._b = i32(len(self._builders))
-		append(&self._builders, strings.make_builder())
-	}
-	return &self._builders[rec._b]
-}
-
-@(private = "file")
-_get_line_buffer :: proc(self: ^Reader, rec: ^Record) -> ^[dynamic]u8 {
-	return &self._line_buffers[rec._f - 1]
-}
-
-@(private = "file")
-_get_fields :: proc(self: ^Reader, rec: ^Record) -> ^[dynamic]string {
-	return &self._fields[rec._f - 1]
+	return .Good
 }
 
 @(private = "file")
@@ -375,7 +357,7 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 	nl_count: u32 
 	end: int 
 
-	field_builder := _get_builder(self, rec)
+	field_builder := _get_or_create_builder(self, rec)
 	strings.reset_builder(field_builder)
 
 	fields: ^[dynamic]string = _get_fields(self, rec)
@@ -453,17 +435,18 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 		strings.write_string(field_builder, self.embedded_break)
 	}
 
+	field_str := strings.to_string(field_builder^)
+
 	if .Trim in self.config {
 		/* rtrim */
-		append(fields, strings.trim_right_space(strings.to_string(field_builder^)))
-	} else {
-		append(fields, strings.to_string(field_builder^))
+		field_str = strings.trim_right_space(field_str)
 	}
+	append(fields, field_str)
 
 	rec_idx^ += end
 	self.embedded_qty += nl_count
 
-	return nil
+	return .Good
 }
 
 @(private = "file")
@@ -472,7 +455,7 @@ _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 
 	rec_idx^ += 1
 	begin := rec_idx^
-	field_builder := _get_builder(self, rec)
+	field_builder := _get_or_create_builder(self, rec)
 	strings.reset_builder(field_builder)
 
 	fields: ^[dynamic]string = _get_fields(self, rec)
@@ -480,23 +463,28 @@ _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 
 	end := strings.index(rec_str[begin:], self._weak_delim)
 	for end == -1 {
-		end = byte_limit^ + begin
+		end = byte_limit^ - begin
 
 		/* quote before EOL */
-		if rec_str[end - 1] == '"' && begin != end {
+		if rec_str[rec_idx^ + end - 1] == '"' && begin != end {
 			end -= 1
 			break
 		}
+
+		strings.write_string(field_builder, rec_str[rec_idx^:byte_limit^])
+		strings.write_string(field_builder, self.embedded_break)
+		nl_count += 1
 
 		if ._From_Get_Record not_in self.config || nl_count > MAX_EMBEDDED_NEW_LINES {
 			return .Reset
 		}
 
 		ret : Status
+		eol : Eol
 		if ._Using_Mmap in self.config {
-			_, ret = _get_line_mmap(self, rec_str)
+			eol, ret = _get_line_mmap(self, rec_str)
 		} else {
-			_, ret = _get_line(self, rec, rec_str)
+			eol, ret = _get_line(self, rec, rec_str)
 		}
 		#partial switch ret {
 		case .Error:
@@ -504,35 +492,36 @@ _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 		case .Eof:
 			return .Reset
 		}
-		//rec_idx^ = byte_limit^ + int(eol)
+		rec_idx^ = byte_limit^ + int(eol)
+		byte_limit^ = len(rec_str)
 
-		old_limit := byte_limit^
-		end = strings.index(rec_str[begin + old_limit:], self._weak_delim)
+		end = strings.index(rec_str[rec_idx^:], self._weak_delim)
 	}
 
-	strings.grow_builder(field_builder, end - begin)
+	strings.grow_builder(field_builder, rec_idx^ + end - begin)
 
 	if .Trim in self.config {
-		i := begin
+		i := rec_idx^
 		for ; i < end && strings.is_space(rune(rec_str[i])); i += 1 {}
 		strings.write_string(field_builder, rec_str[i:i + end])
-		append(fields, strings.trim_right_space(strings.to_string(field_builder^)))
+		field_str := strings.to_string(field_builder^)
+		append(fields, strings.trim_right_space(field_str))
 	} else {
-		strings.write_string(field_builder, rec_str[begin:begin + end])
-		append(fields, strings.to_string(field_builder^))
+		strings.write_string(field_builder, rec_str[rec_idx^:rec_idx^+end])
+		field_str := strings.to_string(field_builder^)
+		append(fields, field_str)
 	}
 
 	rec_idx^ += end + 1
 
 	self.embedded_qty += nl_count
 
-	return nil
+	return .Good
 }
 
 @(private = "file")
 _parse_none :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> Status {
 	begin := rec_idx^
-	nl_count: u32 
 
 	fields: ^[dynamic]string = _get_fields(self, rec)
 	rec_str := fields[0]
@@ -552,7 +541,56 @@ _parse_none :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 
 	rec_idx^ += end
 
-	return nil
+	return .Good
+}
+
+@(private = "file")
+_init_record :: proc(self: ^Reader, rec: ^Record) {
+	rec^ =  {
+		_b = -1,
+		_f = i32(len(self._fields)) + 1,
+	}
+	append_nothing(&self._fields)
+	append_nothing(_get_fields(self, rec))
+	if ._Using_Mmap not_in self.config {
+		append_nothing(&self._line_buffers)
+	}
+}
+
+@(private = "file")
+_get_or_create_builder :: proc(self: ^Reader, rec: ^Record) -> ^strings.Builder {
+	if rec._b == -1 {
+		rec._b = i32(len(self._builders))
+		append(&self._builders, make([dynamic]strings.Builder))
+	}
+
+	builder_vec := &self._builders[rec._b]
+
+	org_cap := cap(builder_vec^)
+	append_nothing(builder_vec)
+	new_cap := cap(builder_vec^)
+
+	/* Hack for Linux where resizing is not guaranteed to be zero'd */
+	if org_cap < new_cap {
+		mem.zero(&builder_vec[org_cap], size_of(strings.Builder) * (new_cap - org_cap))
+	}
+
+	builder := &builder_vec[len(builder_vec^) - 1]
+	if strings.builder_cap(builder^) == 0 {
+		builder^ = strings.make_builder()
+	}
+
+	return builder
+}
+
+@(private = "file")
+_get_line_buffer :: proc(self: ^Reader, rec: ^Record) -> ^[dynamic]u8 {
+	return &self._line_buffers[rec._f - 1]
+}
+
+@(private = "file")
+_get_fields :: proc(self: ^Reader, rec: ^Record) -> ^[dynamic]string {
+	return &self._fields[rec._f - 1]
 }
 
 @(private = "file")
@@ -614,7 +652,7 @@ _get_line_mmap :: proc(self: ^Reader, rec_str: ^string) -> (Eol, Status) {
 		return .None, .Eof
 	}
 
-	return ret, nil
+	return ret, .Good
 }
 
 @(private = "file")
@@ -644,13 +682,13 @@ _get_line :: proc(self: ^Reader, rec: ^Record, rec_str: ^string) -> (Eol, Status
 
 	if length >= 2 && rec_str^[length - 2] == '\r' {
 		rec_str^ = rec_str[:length - 2]
-		return .Crlf, nil
+		return .Crlf, .Good
 	} else if e == nil {
 		rec_str^ = rec_str[:length - 1]
-		return .Lf, nil
+		return .Lf, .Good
 	}
 
-	return .None, nil
+	return .None, .Good
 }
 
 @(private = "file")
@@ -673,7 +711,7 @@ _lower_standard :: proc(self: ^Reader) -> Status {
 	}
 
 	reset(self)
-	return nil
+	return .Good
 }
 
 @(private = "file")
@@ -681,3 +719,4 @@ _error :: proc(msg: string) -> Status {
 	fmt.fprintf(os.stderr, "%s\n", msg)
 	return .Error
 }
+

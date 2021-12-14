@@ -17,23 +17,30 @@ main :: proc() {
 		os.write_string(os.stderr, "failed to build io.writer\n")
 		os.exit(2)
 	}
-	buf_stdout : bufio.Writer
+	buf_stdout: bufio.Writer
 	bufio.writer_init(&buf_stdout, stdout_writer)
+
+	cfg: bit_set[fastrecs.Config]
+	if getargs.get_flag(&argparser, "m") {
+		cfg +=  {
+			.Use_Mmap,
+		}
+	}
 
 	rec: fastrecs.Record
 	reader: fastrecs.Reader
 
-	cfg : bit_set[fastrecs.Config]
-	if getargs.get_flag(&argparser, "m") {
-		cfg += {.Use_Mmap}
-	}
-
-	fastrecs.reader_construct(&reader, cfg)
+	fastrecs.construct(&reader, cfg)
+	reader.quote_style = .Weak
 
 	if argparser.arg_idx < len(os.args) {
-		fastrecs.open(&reader, os.args[argparser.arg_idx])
+		if fastrecs.open(&reader, os.args[argparser.arg_idx]) != nil {
+			os.exit(2)
+		}
 	} else {
-		fastrecs.open(&reader)
+		if fastrecs.open(&reader) != nil {
+			os.exit(2)
+		}
 	}
 
 	loop: for {
@@ -57,10 +64,9 @@ main :: proc() {
 	}
 
 	fastrecs.close(&reader)
-	fastrecs.reader_destroy(&reader)
+	fastrecs.destroy(&reader)
 
 	bufio.writer_flush(&buf_stdout)
 
 	getargs.destroy(&argparser)
 }
-
