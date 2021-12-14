@@ -1,6 +1,5 @@
 .gdb_history
 out.txt
-*.tsv
-*.csv
+*.txt
 csvtool
 
