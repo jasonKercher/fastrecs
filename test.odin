@@ -263,10 +263,8 @@ parse_none :: proc(t: ^testing.T) {
 	_teardown()
 }
 
-@(test)
-file_rfc :: proc(t: ^testing.T) {
-	_setup()
-
+@(private = "file")
+_run_file_rfc :: proc(t: ^testing.T) {
 	ret: fastrecs.Status 
 
 	fastrecs.open(&reader, "basic.csv")
@@ -299,14 +297,25 @@ file_rfc :: proc(t: ^testing.T) {
 
 	testing.expect_value(t, reader.rows, 4)
 	testing.expect_value(t, reader.embedded_qty, 1)
+}
 
+@(test)
+file_rfc :: proc(t: ^testing.T) {
+	_setup()
+	_run_file_rfc(t)
 	_teardown()
 }
 
 @(test)
-file_weak :: proc(t: ^testing.T) {
+file_rfc_mmap :: proc(t: ^testing.T) {
 	_setup()
+	reader.config += {.Use_Mmap}
+	_run_file_rfc(t)
+	_teardown()
+}
 
+@(private = "file")
+_run_file_weak :: proc(t: ^testing.T) {
 	ret: fastrecs.Status 
 
 	fastrecs.open(&reader, "basic.csv")
@@ -340,14 +349,25 @@ file_weak :: proc(t: ^testing.T) {
 
 	testing.expect_value(t, reader.rows, 4)
 	testing.expect_value(t, reader.embedded_qty, 1)
+}
 
+@(test)
+file_weak :: proc(t: ^testing.T) {
+	_setup()
+	_run_file_weak(t)
 	_teardown()
 }
 
 @(test)
-file_none :: proc(t: ^testing.T) {
+file_weak_mmap :: proc(t: ^testing.T) {
 	_setup()
+	reader.config += {.Use_Mmap}
+	_run_file_weak(t)
+	_teardown()
+}
 
+@(private = "file")
+_run_file_none :: proc(t: ^testing.T) {
 	ret: fastrecs.Status 
 
 	fastrecs.open(&reader, "basic.csv")
@@ -386,13 +406,60 @@ file_none :: proc(t: ^testing.T) {
 
 	testing.expect_value(t, reader.rows, 5)
 	testing.expect_value(t, reader.embedded_qty, 0)
+}
 
+@(test)
+file_none :: proc(t: ^testing.T) {
+	_setup()
+	_run_file_none(t)
 	_teardown()
 }
 
 @(test)
-multi_eol :: proc(t: ^testing.T) {
+file_none_mmap :: proc(t: ^testing.T) {
 	_setup()
+	reader.config += {.Use_Mmap}
+	_run_file_none(t)
+	_teardown()
+}
+
+@(private = "file")
+_run_multi_eol_rfc :: proc(t: ^testing.T) {
+	ret: fastrecs.Status
+
+	fastrecs.open(&reader, "test_multi_eol.csv")
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Good)
+	testing.expect_value(t, len(rec.fields), 3)
+	testing.expect_value(t, rec.fields[0], "123")
+	testing.expect_value(t, rec.fields[1], "4\n5\n6")
+	testing.expect_value(t, rec.fields[2], "789")
+
+	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Eof)
+
+	testing.expect_value(t, reader.rows, 1)
+	testing.expect_value(t, reader.embedded_qty, 2)
+}
+
+@(test)
+multi_eol_rfc :: proc(t: ^testing.T) {
+	_setup()
+	_run_multi_eol_rfc(t)
+	_teardown()
+}
+
+@(test)
+multi_eol_rfc_mmap :: proc(t: ^testing.T) {
+	_setup()
+	reader.config += {.Use_Mmap}
+	_run_multi_eol_rfc(t)
+	_teardown()
+}
+
+@(private = "file")
+_run_multi_eol_weak :: proc(t: ^testing.T) {
+	reader.quote_style = .Weak
 
 	ret: fastrecs.Status
 
@@ -409,14 +476,25 @@ multi_eol :: proc(t: ^testing.T) {
 
 	testing.expect_value(t, reader.rows, 1)
 	testing.expect_value(t, reader.embedded_qty, 2)
+}
 
+@(test)
+multi_eol_weak :: proc(t: ^testing.T) {
+	_setup()
+	_run_multi_eol_weak(t)
 	_teardown()
 }
 
-//@(test)
-failsafe_eof :: proc(t: ^testing.T) {
+@(test)
+multi_eol_weak_mmap :: proc(t: ^testing.T) {
 	_setup()
+	reader.config += {.Use_Mmap}
+	_run_multi_eol_weak(t)
+	_teardown()
+}
 
+@(private = "file")
+_run_failsafe_eof :: proc(t: ^testing.T) {
 	ret: fastrecs.Status
 
 	reader.config += {.Failsafe}
@@ -433,15 +511,30 @@ failsafe_eof :: proc(t: ^testing.T) {
 	testing.expect_value(t, rec.fields[0], "\"")
 
 	ret = fastrecs.get_record(&reader, &rec)
+	testing.expect_value(t, ret, fastrecs.Status.Good)
+	testing.expect_value(t, rec.fields[0], "")
+
+	ret = fastrecs.get_record(&reader, &rec)
 	testing.expect_value(t, ret, fastrecs.Status.Eof)
-	
+}
+
+@(test)
+failsafe_eof :: proc(t: ^testing.T) {
+	_setup()
+	_run_failsafe_eof(t)
 	_teardown()
 }
 
-//@(test)
-failsafe_max :: proc(t: ^testing.T) {
+@(test)
+failsafe_eof_mmap :: proc(t: ^testing.T) {
 	_setup()
+	reader.config += {.Use_Mmap}
+	_run_failsafe_eof(t)
+	_teardown()
+}
 
+@(private = "file")
+_run_failsafe_max :: proc(t: ^testing.T) {
 	ret: fastrecs.Status
 
 	reader.config += {.Failsafe}
@@ -461,15 +554,26 @@ failsafe_max :: proc(t: ^testing.T) {
 	for ; ret == .Good; ret = fastrecs.get_record(&reader, &rec) {}
 
 	testing.expect_value(t, ret, fastrecs.Status.Eof)
-	testing.expect_value(t, reader.rows, 41)
-	
+	testing.expect_value(t, reader.rows, 42)
+}
+
+@(test)
+failsafe_max :: proc(t: ^testing.T) {
+	_setup()
+	_run_failsafe_max(t)
 	_teardown()
 }
 
-//@(test)
-failsafe_weak :: proc(t: ^testing.T) {
+@(test)
+failsafe_max_mmap :: proc(t: ^testing.T) {
 	_setup()
+	reader.config += {.Use_Mmap}
+	_run_failsafe_max(t)
+	_teardown()
+}
 
+@(private = "file")
+_run_failsafe_weak :: proc(t: ^testing.T) {
 	ret: fastrecs.Status
 
 	reader.config += {.Failsafe}
@@ -487,6 +591,19 @@ failsafe_weak :: proc(t: ^testing.T) {
 
 	ret = fastrecs.get_record(&reader, &rec)
 	testing.expect_value(t, ret, fastrecs.Status.Eof)
-	
+}
+
+@(test)
+failsafe_weak :: proc(t: ^testing.T) {
+	_setup()
+	_run_failsafe_weak(t)
+	_teardown()
+}
+
+@(test)
+failsafe_weak_mmap :: proc(t: ^testing.T) {
+	_setup()
+	reader.config += {.Use_Mmap}
+	_run_failsafe_weak(t)
 	_teardown()
 }

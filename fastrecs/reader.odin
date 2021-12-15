@@ -63,6 +63,7 @@ Reader :: struct {
 	_normal:        i32,
 	_normal_org:    i32,
 	_reader:        bufio.Reader,
+	_io_reader:     io.Reader,
 	_builders:      [dynamic][dynamic]strings.Builder,
 	_line_buffers:  [dynamic][dynamic]u8,
 	_fields:        [dynamic][dynamic]string,
@@ -151,8 +152,10 @@ open :: proc(self: ^Reader, file_name: string = "") -> Status {
 		._Using_Mmap,
 	}
 
-	r, ok := io.to_reader(os.stream_from_handle(self.file))
-	bufio.reader_init(&self._reader, r)
+
+	ok: bool
+	self._io_reader, ok = io.to_reader(os.stream_from_handle(self.file))
+	bufio.reader_init(&self._reader, self._io_reader)
 
 	return .Good
 }
@@ -189,7 +192,9 @@ seek :: proc(self: ^Reader, offset: u64) -> Status {
 		return .Good /* lol */
 	}
 
-	os.seek(self.file, i64(offset), os.SEEK_SET)
+	bufio.reader_reset(&self._reader, self._io_reader)
+	io.seek(io.to_seeker(self._io_reader), i64(offset), .Start)
+	//os.seek(self.file, i64(offset), os.SEEK_SET)
 	return .Good
 }
 
@@ -299,6 +304,10 @@ parse :: proc(
 
 	rec_idx: int 
 
+	if byte_limit == 0 {
+		append(fields, "")
+	}
+
 	for rec_idx < byte_limit && len(fields^) < field_limit {
 		if len(fields^) > 1 {
 			rec_idx += len(self._delim)
@@ -378,7 +387,7 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 				false_delim = false
 			}
 
-			strings.grow_builder(field_builder, end - begin)
+			strings.grow_builder(field_builder, rec_idx^ + end - begin)
 
 			for i := 0; i < end; i += 1 {
 				idx := rec_idx^ + i
@@ -417,15 +426,22 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 			return .Reset
 		}
 
-		ret: Status
-		eol: Eol
+		ret: Status 
+		eol: Eol 
 		if ._Using_Mmap in self.config {
 			eol, ret = _get_line_mmap(self, rec_str)
 		} else {
-			/* NOTE: REALLOCATION ON THE LINE BUFFER
-			 *       IS GOING TO FUCK US GOOD!
+			/* NOTE: If the line buffer reallocates to a different
+			 *       address, all the previous strings that pointed
+			 *       at the old address are now pointing at an
+			 *       invalid memory location...
 			 */
+			old_buf := _get_line_buffer(self, rec)^
 			eol, ret = _get_line(self, rec, rec_str)
+			new_buf := _get_line_buffer(self, rec)^
+			if len(fields) > 0 && mem.raw_data(old_buf) != mem.raw_data(new_buf) {
+				_reset_strings(self, fields, old_buf, new_buf)
+			}
 		}
 		#partial switch ret {
 		case .Error:
@@ -435,6 +451,7 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 		}
 		rec_idx^ = byte_limit^ + int(eol)
 		byte_limit^ = len(rec_str)
+		end = -1
 		strings.write_string(field_builder, self.embedded_break)
 	}
 
@@ -464,12 +481,12 @@ _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 	fields: ^[dynamic]string = _get_fields(self, rec)
 	rec_str := &fields[0]
 
-	end := strings.index(rec_str[begin:], self._weak_delim)
+	end := strings.index(rec_str[rec_idx^:], self._weak_delim)
 	for end == -1 {
-		end = byte_limit^ - begin
+		end = byte_limit^ - rec_idx^
 
 		/* quote before EOL */
-		if rec_str[rec_idx^ + end - 1] == '"' && begin != end {
+		if end > 0 && rec_str[rec_idx^ + end - 1] == '"' {
 			end -= 1
 			break
 		}
@@ -482,15 +499,22 @@ _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 			return .Reset
 		}
 
-		ret : Status
-		eol : Eol
+		ret: Status 
+		eol: Eol 
 		if ._Using_Mmap in self.config {
 			eol, ret = _get_line_mmap(self, rec_str)
 		} else {
-			/* NOTE: REALLOCATION ON THE LINE BUFFER
-			 *       IS GOING TO FUCK US GOOD!
+			/* NOTE: If the line buffer reallocates to a different
+			 *       address, all the previous strings that pointed
+			 *       at the old address are now pointing at an
+			 *       invalid memory location...
 			 */
+			old_buf := _get_line_buffer(self, rec)^
 			eol, ret = _get_line(self, rec, rec_str)
+			new_buf := _get_line_buffer(self, rec)^
+			if mem.raw_data(old_buf) != mem.raw_data(new_buf) {
+				_reset_strings(self, fields, old_buf, new_buf)
+			}
 		}
 		#partial switch ret {
 		case .Error:
@@ -513,7 +537,7 @@ _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 		field_str := strings.to_string(field_builder^)
 		append(fields, strings.trim_right_space(field_str))
 	} else {
-		strings.write_string(field_builder, rec_str[rec_idx^:rec_idx^+end])
+		strings.write_string(field_builder, rec_str[rec_idx^:rec_idx^ + end])
 		field_str := strings.to_string(field_builder^)
 		append(fields, field_str)
 	}
@@ -675,14 +699,14 @@ _get_line :: proc(self: ^Reader, rec: ^Record, rec_str: ^string) -> (Eol, Status
 		line, e = bufio.reader_read_slice(&self._reader, '\n')
 		append(buf, ..line)
 	}
-	if e != nil && e != .No_Progress {
+	if e != nil && e != .No_Progress && e != .EOF {
 		return .None, .Error
 	}
 
 	rec_str^ = string(buf[:])
 	length := len(rec_str^)
 
-	if e == .EOF || e == .No_Progress {
+	if e == .No_Progress || e == .EOF {
 		return .None, .Eof
 	}
 
@@ -695,6 +719,21 @@ _get_line :: proc(self: ^Reader, rec: ^Record, rec_str: ^string) -> (Eol, Status
 	}
 
 	return .None, .Good
+}
+
+@(private = "file")
+_reset_strings :: proc(self: ^Reader, fields: ^[dynamic]string, old_buf, new_buf: [dynamic]u8) {
+	lower_bound := uintptr(mem.raw_data(old_buf))
+	upper_bound := lower_bound + uintptr(len(old_buf))
+
+	for i := 0; i < len(fields); i += 1 {
+		addr := uintptr(mem.raw_data(fields[i]))
+		if addr >= lower_bound && addr <= upper_bound {
+			off := int(addr - lower_bound)
+			n := len(fields[i])
+			fields[i] = string(new_buf[off:off+n])
+		}
+	}
 }
 
 @(private = "file")
@@ -717,7 +756,7 @@ _lower_standard :: proc(self: ^Reader) -> Status {
 	}
 
 	reset(self)
-	return .Good
+	return .Reset
 }
 
 @(private = "file")
@@ -725,4 +764,3 @@ _error :: proc(msg: string) -> Status {
 	fmt.fprintf(os.stderr, "%s\n", msg)
 	return .Error
 }
-
