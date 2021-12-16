@@ -660,7 +660,6 @@ _get_line_mmap :: proc(self: ^Reader, rec_str: ^string) -> (Eol, Status) {
 		return .None, .Eof
 	}
 
-	start_len := len(rec_str^)
 	start_offset := uintptr(self.offset)
 	if mem.raw_data(rec_str^) != nil {
 		start_offset = uintptr(mem.raw_data(rec_str^)) - uintptr(self._mmap_ptr)
