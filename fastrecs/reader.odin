@@ -661,7 +661,10 @@ _get_line_mmap :: proc(self: ^Reader, rec_str: ^string) -> (Eol, Status) {
 	}
 
 	start_len := len(rec_str^)
-	start_offset := self.offset - u64(start_len)
+	start_offset := uintptr(self.offset)
+	if mem.raw_data(rec_str^) != nil {
+		start_offset = uintptr(mem.raw_data(rec_str^)) - uintptr(self._mmap_ptr)
+	}
 
 	ret := Eol.None
 	eol := bytes.index_byte(self._mmap_ptr[self.offset:self.file_size], '\n')
@@ -678,7 +681,7 @@ _get_line_mmap :: proc(self: ^Reader, rec_str: ^string) -> (Eol, Status) {
 
 	self.offset += u64(eol) + 1
 
-	if self.offset >= self.file_size && len(rec_str^) == start_len {
+	if self.offset >= self.file_size && ret == nil {
 		return .None, .Eof
 	}
 

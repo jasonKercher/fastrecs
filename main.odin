@@ -31,7 +31,7 @@ main :: proc() {
 	reader: fastrecs.Reader
 
 	fastrecs.construct(&reader, cfg)
-	reader.quote_style = .Weak
+	//reader.quote_style = .Weak
 
 	if argparser.arg_idx < len(os.args) {
 		if fastrecs.open(&reader, os.args[argparser.arg_idx]) != nil {
