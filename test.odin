@@ -1,7 +1,6 @@
 package fastrecs
 
 import "core:testing"
-//import "fastrecs"
 
 rec: Record 
 reader: Reader 
