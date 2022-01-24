@@ -83,6 +83,20 @@ Reader :: struct {
 	quote_style:    Quotes,
 }
 
+make_reader :: proc(cfg: bit_set[Config] = {}) -> Reader {
+	return Reader {
+		file           = os.stdin,
+		_builders      = make([dynamic][dynamic]strings.Builder),
+		_fields        = make([dynamic][dynamic]string),
+		_line_buffers  = make([dynamic][dynamic]u8),
+		quote_style    = .Rfc4180,
+		_normal        = -1,
+		_normal_org    = -1,
+		embedded_break = "\n",
+		config         = cfg,
+	}
+}
+
 construct :: proc(self: ^Reader, cfg: bit_set[Config] = {}) {
 	self^ =  {
 		file           = os.stdin,
