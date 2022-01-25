@@ -1,7 +1,6 @@
 package fastrecs
 
 import "core:math/bits"
-import "core:sys/unix"
 import "core:strings"
 import "core:bufio"
 import "core:bytes"
@@ -9,8 +8,6 @@ import "core:fmt"
 import "core:mem"
 import "core:io"
 import "core:os"
-import "core:c"
-
 
 MAX_EMBEDDED_NEW_LINES :: 8
 
@@ -156,11 +153,11 @@ open :: proc(self: ^Reader, file_name: string = "") -> Status {
 		self.file_size = u64(size)
 
 		if .Use_Mmap in self.config {
-			m := unix.sys_mmap(nil, uint(size), PROT_READ, MAP_PRIVATE, i32(self.file), 0)
+			m := sys_mmap(nil, uint(size), PROT_READ, MAP_PRIVATE, i32(self.file), 0)
 			if m == nil {
 				return _error("mmap failed")
 			}
-			unix.sys_madvise(m, uint(size), int(Advice.Sequential))
+			sys_madvise(m, uint(size), int(Advice.Sequential))
 
 			self._mmap_ptr = ([^]u8)(m)
 			self.config +=  {
@@ -191,7 +188,7 @@ close :: proc(self: ^Reader) -> Status {
 	}
 
 	if ._Using_Mmap in self.config {
-		unix.sys_munmap(rawptr(self._mmap_ptr), uint(self.file_size))
+		sys_munmap(rawptr(self._mmap_ptr), uint(self.file_size))
 		self._mmap_ptr = nil
 		self.config -=  {
 			._Using_Mmap,
@@ -227,7 +224,7 @@ advise :: proc(self: ^Reader, advice: Advice) -> Status {
 	if ._Using_Mmap not_in self.config {
 		return .Good
 	}
-	if unix.sys_madvise(self._mmap_ptr, uint(self.file_size), int(advice)) != 0 {
+	if sys_madvise(self._mmap_ptr, uint(self.file_size), int(advice)) != 0 {
 		return _error("madvise")
 	}
 	return .Good
