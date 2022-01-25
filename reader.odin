@@ -61,11 +61,11 @@ Record :: struct {
 
 Reader :: struct {
 	file:           os.Handle,
-	file_size:      u64,
+	file_size:      i64,
 	_delim:         string,
 	_weak_delim:    string,
 	embedded_break: string,
-	offset:         u64,
+	offset:         i64,
 	rows:           u32,
 	embedded_qty:   u32,
 	_mmap_ptr:      [^]u8,
@@ -150,7 +150,7 @@ open :: proc(self: ^Reader, file_name: string = "") -> Status {
 		if size == 0 {
 			return .Good
 		}
-		self.file_size = u64(size)
+		self.file_size = size
 
 		if .Use_Mmap in self.config {
 			m := sys_mmap(nil, uint(size), PROT_READ, MAP_PRIVATE, i32(self.file), 0)
@@ -204,7 +204,7 @@ close :: proc(self: ^Reader) -> Status {
 	return .Good
 }
 
-seek :: proc(self: ^Reader, offset: u64) -> Status {
+seek :: proc(self: ^Reader, offset: i64) -> Status {
 	if offset > self.file_size {
 		return .Error
 	}
@@ -687,19 +687,19 @@ _get_line_mmap :: proc(self: ^Reader, rec_str: ^string) -> (Eol, Status) {
 	}
 
 	ret := Eol.None
-	eol := bytes.index_byte(self._mmap_ptr[self.offset:self.file_size], '\n')
+	eol := i64(bytes.index_byte(self._mmap_ptr[self.offset:self.file_size], '\n'))
 	if eol == -1 {
 		rec_str^ = string(self._mmap_ptr[start_offset:self.file_size])
 		ret = nil
-	} else if self._mmap_ptr[self.offset + u64(eol) - 1] == '\r' {
-		rec_str^ = string(self._mmap_ptr[start_offset:self.offset + u64(eol) - 1])
+	} else if self._mmap_ptr[self.offset + eol - 1] == '\r' {
+		rec_str^ = string(self._mmap_ptr[start_offset:self.offset + eol - 1])
 		ret = .Crlf
 	} else {
-		rec_str^ = string(self._mmap_ptr[start_offset:self.offset + u64(eol)])
+		rec_str^ = string(self._mmap_ptr[start_offset:self.offset + eol])
 		ret = .Lf
 	}
 
-	self.offset += u64(eol) + 1
+	self.offset += eol + 1
 
 	if self.offset >= self.file_size && ret == nil {
 		return .None, .Eof
