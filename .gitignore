@@ -1,3 +1,4 @@
 fastrecs
 .gdb_history
+*.o
 *.txt
