@@ -329,7 +329,7 @@ parse :: proc(
 		append(fields, "")
 	}
 
-	for rec_idx < byte_limit && len(fields^) < field_limit {
+	for rec_idx < byte_limit && len(fields^) <= field_limit {
 		if len(fields^) > 1 {
 			rec_idx += len(self._delim)
 
