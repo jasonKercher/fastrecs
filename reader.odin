@@ -11,16 +11,16 @@ import "core:os"
 
 MAX_EMBEDDED_NEW_LINES :: 8
 
-PROT_READ        :: 0x1
-MAP_PRIVATE      :: 0x2
+PROT_READ :: 0x1
+MAP_PRIVATE :: 0x2
 
 //MADV_NORMAL      :: 0
 //MADV_RANDOM      :: 1
 //MADV_SEQUENTIAL  :: 2
 
 Advice :: enum {
-	Normal  = 0,
-	Random = 1,
+	Normal     = 0,
+	Random     = 1,
 	Sequential = 2,
 }
 
@@ -65,10 +65,10 @@ Reader :: struct {
 	_delim:         string,
 	_weak_delim:    string,
 	embedded_break: string,
+	_mmap:          string,
 	offset:         i64,
 	rows:           u32,
 	embedded_qty:   u32,
-	_mmap_ptr:      [^]u8,
 	_normal:        i32,
 	_normal_org:    i32,
 	_reader:        bufio.Reader,
@@ -81,21 +81,21 @@ Reader :: struct {
 }
 
 make_reader :: proc(cfg: bit_set[Config] = {}) -> Reader {
-	return Reader {
-		file           = os.stdin,
-		_builders      = make([dynamic][dynamic]strings.Builder),
-		_fields        = make([dynamic][dynamic]string),
-		_line_buffers  = make([dynamic][dynamic]u8),
-		quote_style    = .Rfc4180,
-		_normal        = -1,
-		_normal_org    = -1,
+	return Reader{
+		file = os.stdin,
+		_builders = make([dynamic][dynamic]strings.Builder),
+		_fields = make([dynamic][dynamic]string),
+		_line_buffers = make([dynamic][dynamic]u8),
+		quote_style = .Rfc4180,
+		_normal = -1,
+		_normal_org = -1,
 		embedded_break = "\n",
-		config         = cfg,
+		config = cfg,
 	}
 }
 
 construct :: proc(self: ^Reader, cfg: bit_set[Config] = {}) {
-	self^ =  {
+	self^ = {
 		file           = os.stdin,
 		_builders      = make([dynamic][dynamic]strings.Builder),
 		_fields        = make([dynamic][dynamic]string),
@@ -133,16 +133,14 @@ open :: proc(self: ^Reader, file_name: string = "") -> Status {
 	close(self)
 
 	if file_name != "" {
-		errno: os.Errno 
+		errno: os.Errno
 		self.file, errno = os.open(file_name, os.O_RDONLY, 0)
 		if errno != 0 {
 			return _error("file error")
 		}
-		self.config +=  {
-			._File_Open,
-		}
+		self.config += {._File_Open}
 
-		size: i64 
+		size: i64
 		size, errno = os.file_size(self.file)
 		if errno != 0 {
 			return _error("file_size error")
@@ -159,20 +157,15 @@ open :: proc(self: ^Reader, file_name: string = "") -> Status {
 			}
 			sys_madvise(m, uint(size), int(Advice.Sequential))
 
-			self._mmap_ptr = ([^]u8)(m)
-			self.config +=  {
-				._Using_Mmap,
-			}
+			temp := ([^]u8)(m)
+			self._mmap = string(temp[0:size])
+			self.config += {._Using_Mmap}
 			return .Good
 		}
 	}
 
-	self.config +=  {
-		._File_Open,
-	}
-	self.config -=  {
-		._Using_Mmap,
-	}
+	self.config += {._File_Open}
+	self.config -= {._Using_Mmap}
 
 
 	ok: bool
@@ -188,11 +181,9 @@ close :: proc(self: ^Reader) -> Status {
 	}
 
 	if ._Using_Mmap in self.config {
-		sys_munmap(rawptr(self._mmap_ptr), uint(self.file_size))
-		self._mmap_ptr = nil
-		self.config -=  {
-			._Using_Mmap,
-		}
+		sys_munmap(mem.raw_data(self._mmap), uint(self.file_size))
+		self._mmap = ""
+		self.config -= {._Using_Mmap}
 	} else {
 		bufio.reader_destroy(&self._reader)
 	}
@@ -224,7 +215,7 @@ advise :: proc(self: ^Reader, advice: Advice) -> Status {
 	if ._Using_Mmap not_in self.config {
 		return .Good
 	}
-	if sys_madvise(self._mmap_ptr, uint(self.file_size), int(advice)) != 0 {
+	if sys_madvise(mem.raw_data(self._mmap), uint(self.file_size), int(advice)) != 0 {
 		return _error("madvise")
 	}
 	return .Good
@@ -261,12 +252,8 @@ get_line_from_record :: proc(rec: Record) -> string {
 	return s_ptr^
 }
 
-get_record :: proc(
-	self: ^Reader,
-	rec: ^Record,
-	field_limit: int = bits.I32_MAX,
-) -> Status {
-	rec_str: string 
+get_record :: proc(self: ^Reader, rec: ^Record, field_limit: int = bits.I32_MAX) -> Status {
+	rec_str: string
 
 	if rec._f == 0 {
 		_init_record(self, rec)
@@ -278,13 +265,9 @@ get_record :: proc(
 		_get_line(self, rec, &rec_str) or_return
 	}
 
-	self.config +=  {
-		._From_Get_Record,
-	}
+	self.config += {._From_Get_Record}
 	ret := parse(self, rec, rec_str, len(rec_str), field_limit)
-	self.config -=  {
-		._From_Get_Record,
-	}
+	self.config -= {._From_Get_Record}
 
 	return ret
 }
@@ -323,7 +306,7 @@ parse :: proc(
 		field_limit = int(self._normal)
 	}
 
-	rec_idx: int 
+	rec_idx: int
 
 	if byte_limit == 0 {
 		append(fields, "")
@@ -344,7 +327,7 @@ parse :: proc(
 			quotes = .None
 		}
 
-		e: Status 
+		e: Status
 		switch quotes {
 		case .All:
 			fallthrough
@@ -384,8 +367,8 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 
 	rec_idx^ += 1
 	begin := rec_idx^
-	nl_count: u32 
-	end: int 
+	nl_count: u32
+	end: int
 
 	field_builder := _get_or_create_builder(self, rec)
 	strings.reset_builder(field_builder)
@@ -428,9 +411,7 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 					last_was_quote = false
 				}
 				/* ltrim */
-				if !keep || (first_char && .Trim in self.config && strings.is_space(
-					   rune(rec_str[idx]),
-				   )) {
+				if !keep || (first_char && .Trim in self.config && strings.is_space(rune(rec_str[idx]))) {
 					continue
 				}
 				strings.write_byte(field_builder, rec_str[idx])
@@ -447,8 +428,8 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 			return .Reset
 		}
 
-		ret: Status 
-		eol: Eol 
+		ret: Status
+		eol: Eol
 		if ._Using_Mmap in self.config {
 			eol, ret = _get_line_mmap(self, rec_str)
 		} else {
@@ -492,7 +473,7 @@ _parse_rfc4180 :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -
 
 @(private = "file")
 _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> Status {
-	nl_count: u32 
+	nl_count: u32
 
 	rec_idx^ += 1
 	begin := rec_idx^
@@ -520,8 +501,8 @@ _parse_weak :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 			return .Reset
 		}
 
-		ret: Status 
-		eol: Eol 
+		ret: Status
+		eol: Eol
 		if ._Using_Mmap in self.config {
 			eol, ret = _get_line_mmap(self, rec_str)
 		} else {
@@ -597,7 +578,7 @@ _parse_none :: proc(self: ^Reader, rec: ^Record, rec_idx, byte_limit: ^int) -> S
 
 @(private = "file")
 _init_record :: proc(self: ^Reader, rec: ^Record) {
-	rec^ =  {
+	rec^ = {
 		_b = -1,
 		_f = i32(len(self._fields)) + 1,
 	}
@@ -647,7 +628,7 @@ _get_fields :: proc(self: ^Reader, rec: ^Record) -> ^[dynamic]string {
 @(private = "file")
 _find_delim :: proc(self: ^Reader, rec_str: string) {
 	char_count :: proc(rec_str: string, delim: u8) -> int {
-		n: int 
+		n: int
 		for c in rec_str {
 			if c == rune(delim) {
 				n += 1
@@ -656,7 +637,7 @@ _find_delim :: proc(self: ^Reader, rec_str: string) {
 		return n
 	}
 
-	max_count: int 
+	max_count: int
 	delims := ",\t|;:"
 
 	max_count = char_count(rec_str, ',')
@@ -677,25 +658,25 @@ _find_delim :: proc(self: ^Reader, rec_str: string) {
 
 @(private = "file")
 _get_line_mmap :: proc(self: ^Reader, rec_str: ^string) -> (Eol, Status) {
-	if self._mmap_ptr == nil || self.offset >= self.file_size {
+	if self._mmap == "" || self.offset >= self.file_size {
 		return .None, .Eof
 	}
 
 	start_offset := uintptr(self.offset)
 	if mem.raw_data(rec_str^) != nil {
-		start_offset = uintptr(mem.raw_data(rec_str^)) - uintptr(self._mmap_ptr)
+		start_offset = uintptr(mem.raw_data(rec_str^)) - uintptr(mem.raw_data(self._mmap))
 	}
 
 	ret := Eol.None
-	eol := i64(bytes.index_byte(self._mmap_ptr[self.offset:self.file_size], '\n'))
+	eol := i64(strings.index_byte(self._mmap[self.offset:self.file_size], '\n'))
 	if eol == -1 {
-		rec_str^ = string(self._mmap_ptr[start_offset:self.file_size])
+		rec_str^ = string(self._mmap[start_offset:self.file_size])
 		ret = nil
-	} else if self._mmap_ptr[self.offset + eol - 1] == '\r' {
-		rec_str^ = string(self._mmap_ptr[start_offset:self.offset + eol - 1])
+	} else if self._mmap[self.offset + eol - 1] == '\r' {
+		rec_str^ = string(self._mmap[start_offset:self.offset + eol - 1])
 		ret = .Crlf
 	} else {
-		rec_str^ = string(self._mmap_ptr[start_offset:self.offset + eol])
+		rec_str^ = string(self._mmap[start_offset:self.offset + eol])
 		ret = .Lf
 	}
 
@@ -716,7 +697,7 @@ _get_line :: proc(self: ^Reader, rec: ^Record, rec_str: ^string) -> (Eol, Status
 	}
 
 	e := io.Error.Buffer_Full
-	line: []u8 
+	line: []u8
 
 	loop: for e == .Buffer_Full {
 		line, e = bufio.reader_read_slice(&self._reader, '\n')
@@ -754,7 +735,7 @@ _reset_strings :: proc(self: ^Reader, fields: ^[dynamic]string, old_buf, new_buf
 		if addr >= lower_bound && addr <= upper_bound {
 			off := int(addr - lower_bound)
 			n := len(fields[i])
-			fields[i] = string(new_buf[off:off+n])
+			fields[i] = string(new_buf[off:off + n])
 		}
 	}
 }
@@ -787,3 +768,4 @@ _error :: proc(msg: string) -> Status {
 	fmt.fprintf(os.stderr, "%s\n", msg)
 	return .Error
 }
+
